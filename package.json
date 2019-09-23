@@ -1,0 +1,15 @@
+{
+  "name": "knn",
+  "version": "0.1.0",
+  "description": "Kekemoto Nuural Network",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts"
+  },
+  "author": "kekemoto",
+  "license": "AGPL-3.0",
+  "devDependencies": {
+    "ts-node": "^8.4.1",
+    "typescript": "^3.6.3"
+  }
+}
