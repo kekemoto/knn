@@ -7,7 +7,7 @@
     "dev": "ts-node src/index.ts"
   },
   "author": "kekemoto",
-  "license": "AGPL-3.0",
+  "license": "MPL-2.0",
   "devDependencies": {
     "ts-node": "^8.4.1",
     "typescript": "^3.6.3"
