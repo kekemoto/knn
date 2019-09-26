@@ -1,8 +1,47 @@
 
+import path = require("path");
+import fs = require("fs");
+
 class DevelopmentError extends Error { }
+
+// Logger
+
+const LOG_PATH = './log/debug'
+
+class Log {
+  static print_write(tag: any, text: any): void {
+    Log.print(tag, text)
+    Log.write(tag, text)
+  }
+
+  static write(tag: any, text: any): void {
+    Log._write(Log._format(tag, text))
+  }
+
+  static print(tag: any, text: any): void {
+    Log._write(Log._format(tag, text))
+  }
+
+  static _format(tag: any, text: any): string {
+    return `[${tag}]`.padStart(18) + `: ${text}\n`
+  }
+
+  static _write(text: string): void {
+    fs.appendFileSync(LOG_PATH, text)
+  }
+
+  static init() {
+    fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true })
+    fs.writeFileSync(LOG_PATH, '')
+  }
+}
+Log.init()
 
 namespace NN {
   const INPUT_SLOT_SIZE = 3
+  // const MAX_DIGITS = 10
+  // DEBUG: For ease of viewing
+  const MAX_DIGITS = 3
 
   // Node
   const INITIAL_SIGNAL = 0
@@ -88,18 +127,19 @@ namespace NN {
     applyNN(inputMap, outputMap, input)
   }
 
-
   // No Genre
 
   function applyNN<Element, Output>(inputMap: InputMap<Element>, outputMap: OutputMap<Output>, input: Element[]): void {
     applyInput(inputMap, input)
     const [answer] = decideAnswer(outputMap)
     const correct = getCorrect(input)
-    console.log(input)
-    console.log(`answer: ${answer}, correct: ${correct}`)
-    console.log(AllNode.size())
-    // showInputMap(inputMap)
+    Log.write('input', input)
+    Log.write('answer', answer)
+    Log.write('correct', correct)
+    Log.write('AllNode.size', AllNode.size())
+    showInputMap(inputMap)
     showOutputMap(outputMap)
+    showAllNodes(inputMap)
     feedbackNN(outputMap, correct)
     resetNodes()
   }
@@ -165,7 +205,7 @@ namespace NN {
   }
 
   function edgeToCorrect(edge: Edge, gap: number, edgeEffect: Effect): void {
-    edge.weight = edge.weight * gap * edgeEffect * EDGE_TO_CORRECT_RATE
+    edge.weight = roundNumber(edge.weight * gap * edgeEffect * EDGE_TO_CORRECT_RATE, MAX_DIGITS)
 
     if (Math.abs(edge.weight) < DELETE_THRESHOULD_WEIGHT) {
       deleteEdge(edge)
@@ -207,7 +247,7 @@ namespace NN {
         return total + signal
       }, 0)
 
-      result.set(edge, affected_signal / total_signal)
+      result.set(edge, roundNumber(affected_signal / total_signal, MAX_DIGITS))
     }
 
     return result
@@ -293,20 +333,56 @@ namespace NN {
   // Display
 
   function showInputMap<Element>(inputMap: InputMap<Element>): void {
-    console.log('=== InputMap ===')
+    Log.write('InputMap:Start', '')
 
     inputMap.forEach((map, index) => {
-      for(let [element, node] of map){
-        console.log(`index: ${index}, element: ${element}, signal: ${node.signal}`)
+      for (let [element, node] of map) {
+        Log.write('InputMap:Node', `index: ${index}, element: ${element}, signal: ${node.signal}`)
       }
     })
+
+    Log.write('InputMap:End', '')
   }
 
   function showOutputMap(outputMap: OutputMap<any>): void {
-    console.log('=== OutputMap ===')
+    Log.write('OutputMap:Start', '')
 
-    for(let [output, node] of outputMap){
-      console.log(`output: ${LearnOutput[output]}, signal: ${node.signal}`)
+    for (let [output, node] of outputMap) {
+      Log.write('OutputMap:Node', `output: ${LearnOutput[output]}, signal: ${node.signal}`)
+    }
+
+    Log.write('OutputMap:End', '')
+  }
+
+  function showAllNodes<Element>(inputMap: InputMap<Element>): void {
+    Log.write('NN:Start', '')
+
+    for (let map of inputMap) {
+      for (let [, node] of map) {
+        recShowAllNodes(node, [])
+      }
+    }
+
+    Log.write('NN:End', '')
+  }
+
+  function recShowAllNodes(node: Node, path: Path): void {
+    path.push(node)
+
+    if (node.output.size === 0) {
+      let text = ''
+      for (let graphElement of path) {
+        if (graphElement instanceof Node) {
+          text += ` [ ${graphElement.signal} ] `
+        } else if (graphElement instanceof Edge) {
+          text += ` = ${graphElement.weight} = `
+        } else { never() }
+      }
+      Log.write('NN:Path', text)
+    }
+
+    for (let edge of node.output) {
+      recShowAllNodes(edge.destination, [...path, edge])
     }
   }
 
@@ -350,7 +426,7 @@ namespace NN {
   // Core NN
 
   function addSignal(node: Node, value: number): void {
-    node.signal += value
+    node.signal = roundNumber(node.signal + value, MAX_DIGITS)
 
     for (let edge of node.output) {
       addSignal(edge.destination, value * edge.weight / edge.destination.input.size)
@@ -426,4 +502,9 @@ function setDifference<T>(a: Set<T>, b: Set<T>): Set<T> {
 
 function never(): never {
   throw new DevelopmentError('Never')
+}
+
+function roundNumber(number: number, size: number) {
+  let disits = 10 ** size
+  return Math.round(number * disits) / disits
 }
