@@ -236,7 +236,7 @@ namespace NN {
       }
     }
 
-    // EdgeEffect = affected signal / total signal
+    // EdgeEffect = affected signal / total signal / self edge weight
     const result = new Map()
 
     for (let [edge, paths] of edgeToPaths) {
@@ -247,7 +247,7 @@ namespace NN {
         return total + signal
       }, 0)
 
-      result.set(edge, roundNumber(affected_signal / total_signal, MAX_DIGITS))
+      result.set(edge, roundNumber(affected_signal / total_signal / edge.weight, MAX_DIGITS))
     }
 
     return result
