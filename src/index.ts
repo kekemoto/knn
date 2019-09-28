@@ -4,26 +4,67 @@ import fs = require("fs");
 
 class DevelopmentError extends Error { }
 
+class Random {
+  // XorShift
+  x = 123456789
+  y = 362436069
+  z = 521288629
+  w: number
+
+  constructor(seed = 88675123) {
+    this.w = seed
+  }
+
+  next(): number {
+    let t = this.x ^ (this.x << 11)
+    this.x = this.y
+    this.y = this.z
+    this.z = this.w
+    return this.w = (this.w ^ (this.w >> 19)) ^ (t ^ (t >> 8));
+  }
+
+  range(min: number, max: number): number {
+    return (this.next() % (max - min)) + min
+  }
+
+  shuffle<T>(array: Array<T>): Array<T> {
+    const result = []
+    const copy = array.concat([])
+    for (let i = 0; i < array.length; i++) {
+      const index = this.range(0, copy.length)
+      result.push(copy[index])
+      copy.splice(index, 1)
+    }
+    return result
+  }
+}
+const random = new Random()
+
 // Logger
 
 const LOG_PATH = './log/debug'
 
+type LogLevel = 'ERROR' | 'WARN' | 'DEBUG'
+
 class Log {
-  static print_write(tag: any, text: any): void {
-    Log.print(tag, text)
-    Log.write(tag, text)
+  static debug(tag: any, text: any): void {
+    Log._write(Log._format('DEBUG', tag, text))
   }
 
-  static write(tag: any, text: any): void {
-    Log._write(Log._format(tag, text))
+  static error(tag: any, text: any): void {
+    Log._write(Log._format('ERROR', tag, text))
+  }
+
+  static warn(tag: any, text: any): void {
+    Log._write(Log._format('WARN', tag, text))
   }
 
   static print(tag: any, text: any): void {
-    Log._write(Log._format(tag, text))
+    console.log(Log._format('DEBUG', tag, text))
   }
 
-  static _format(tag: any, text: any): string {
-    return `[${tag}]`.padStart(18) + `: ${text}\n`
+  static _format(level: LogLevel, tag: any, text: any): string {
+    return `[${level}]: `.padStart(5 + 4) + `[${tag}]: `.padStart(16 + 4) + `${text}\n`
   }
 
   static _write(text: string): void {
@@ -109,6 +150,8 @@ namespace NN {
   // type GraphElement = Edge | Node
   type Path = Array<Edge | Node>
 
+  type InputData<Element> = Array<Element>
+
   enum LearnOutput { Hit, Nothing }
   type InputMap<Element> = Array<Map<Element, Node>>
   type OutputMap<Output> = Map<Output, Node>
@@ -117,7 +160,7 @@ namespace NN {
 
   const elements = ['h', 'i', 'e']
 
-  const testData = makePatterns(elements)
+  const testData = makeTestData(elements, 1)
 
   const [inputMap] = makeInputMap(elements, INPUT_SLOT_SIZE)
 
@@ -129,14 +172,15 @@ namespace NN {
 
   // No Genre
 
-  function applyNN<Element, Output>(inputMap: InputMap<Element>, outputMap: OutputMap<Output>, input: Element[]): void {
+  function applyNN<Element, Output>(inputMap: InputMap<Element>, outputMap: OutputMap<Output>, input: InputData<Element>): void {
     applyInput(inputMap, input)
     const [answer] = decideAnswer(outputMap)
     const correct = getCorrect(input)
-    Log.write('input', input)
-    Log.write('answer', answer)
-    Log.write('correct', correct)
-    Log.write('AllNode.size', AllNode.size())
+    Log.debug('input', input)
+    Log.debug('answer', answer)
+    Log.debug('correct', correct)
+    Log.debug('isCorrect', answer === correct)
+    Log.debug('AllNode.size', AllNode.size())
     showInputMap(inputMap)
     showOutputMap(outputMap)
     showAllNodes(inputMap)
@@ -247,7 +291,15 @@ namespace NN {
         return total + signal
       }, 0)
 
-      result.set(edge, roundNumber(affected_signal / total_signal / edge.weight, MAX_DIGITS))
+      let effect = roundNumber(affected_signal / total_signal / edge.weight, MAX_DIGITS)
+      if(isNaN(effect) || effect === Infinity || effect === -Infinity){
+        Log.error('edgeEffect', effect)
+        Log.error('affected_signal', affected_signal)
+        Log.error('total_signal', total_signal)
+        Log.error('edge.weight', edge.weight)
+        throw new DevelopmentError('effect is NaN')
+      }
+      result.set(edge, effect)
     }
 
     return result
@@ -315,7 +367,20 @@ namespace NN {
     return [result_output, result_node]
   }
 
-  function makePatterns<Element>(elements: Element[], length?: number): Array<Array<Element>> {
+  // Make Input Data
+
+  function makeTestData<Element>(elements: Element[], count: number): InputData<Element>[] {
+    let result: InputData<Element>[] = []
+    const allPattern = makePatterns(elements)
+
+    for (let i = 0; i < count; i++) {
+      result = result.concat(random.shuffle(allPattern))
+    }
+
+    return result
+  }
+
+  function makePatterns<Element>(elements: Element[], length?: number): InputData<Element>[] {
     length = length || elements.length
     return recMakePatterns([], elements, length)
   }
@@ -333,29 +398,29 @@ namespace NN {
   // Display
 
   function showInputMap<Element>(inputMap: InputMap<Element>): void {
-    Log.write('InputMap:Start', '')
+    Log.debug('InputMap:Start', '')
 
     inputMap.forEach((map, index) => {
       for (let [element, node] of map) {
-        Log.write('InputMap:Node', `index: ${index}, element: ${element}, signal: ${node.signal}`)
+        Log.debug('InputMap:Node', `index: ${index}, element: ${element}, signal: ${node.signal}`)
       }
     })
 
-    Log.write('InputMap:End', '')
+    Log.debug('InputMap:End', '')
   }
 
   function showOutputMap(outputMap: OutputMap<any>): void {
-    Log.write('OutputMap:Start', '')
+    Log.debug('OutputMap:Start', '')
 
     for (let [output, node] of outputMap) {
-      Log.write('OutputMap:Node', `output: ${LearnOutput[output]}, signal: ${node.signal}`)
+      Log.debug('OutputMap:Node', `output: ${LearnOutput[output]}, signal: ${node.signal}`)
     }
 
-    Log.write('OutputMap:End', '')
+    Log.debug('OutputMap:End', '')
   }
 
   function showAllNodes<Element>(inputMap: InputMap<Element>): void {
-    Log.write('NN:Start', '')
+    Log.debug('NN:Start', '')
 
     for (let map of inputMap) {
       for (let [, node] of map) {
@@ -363,7 +428,7 @@ namespace NN {
       }
     }
 
-    Log.write('NN:End', '')
+    Log.debug('NN:End', '')
   }
 
   function recShowAllNodes(node: Node, path: Path): void {
@@ -373,12 +438,12 @@ namespace NN {
       let text = ''
       for (let graphElement of path) {
         if (graphElement instanceof Node) {
-          text += ` [ ${graphElement.signal} ] `
+          text += `[ ${graphElement.signal} ] `
         } else if (graphElement instanceof Edge) {
-          text += ` = ${graphElement.weight} = `
+          text += `= ${graphElement.weight} = `
         } else { never() }
       }
-      Log.write('NN:Path', text)
+      Log.debug('NN:Path', text)
     }
 
     for (let edge of node.output) {
@@ -388,7 +453,7 @@ namespace NN {
 
   // Serial Input Data
 
-  function applyInput<Element>(inputMap: InputMap<Element>, inputData: Element[]): void {
+  function applyInput<Element>(inputMap: InputMap<Element>, inputData: InputData<Element>): void {
     inputMap.forEach((map, index) => {
       for (let [element, node] of map) {
         inputData[index] === element ? addSignal(node, 1) : addSignal(node, -1)
