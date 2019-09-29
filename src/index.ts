@@ -42,7 +42,8 @@ const random = new Random()
 
 // Logger
 
-const LOG_PATH = './log/debug'
+const LOG_DIR_PATH = './log'
+const LOG_DEBUG_PATH = LOG_DIR_PATH + '/debug'
 
 type LogLevel = 'ERROR' | 'WARN' | 'DEBUG'
 
@@ -60,7 +61,7 @@ class Log {
   }
 
   static print(tag: any, text: any): void {
-    console.log(Log._format('DEBUG', tag, text))
+    console.log(Log._format('DEBUG', tag, text).trim())
   }
 
   static _format(level: LogLevel, tag: any, text: any): string {
@@ -68,15 +69,54 @@ class Log {
   }
 
   static _write(text: string): void {
-    fs.appendFileSync(LOG_PATH, text)
+    fs.appendFileSync(LOG_DEBUG_PATH, text)
   }
 
   static init() {
-    fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true })
-    fs.writeFileSync(LOG_PATH, '')
+    fs.mkdirSync(path.dirname(LOG_DEBUG_PATH), { recursive: true })
+    fs.writeFileSync(LOG_DEBUG_PATH, '')
   }
 }
 Log.init()
+
+class CorrectCollector {
+  static _corrects = new Array<boolean>()
+
+  static push(correct: boolean): void {
+    this._corrects.push(correct)
+    if (20 < this._corrects.length) {
+      this._corrects.shift()
+    }
+  }
+
+  static rate(): number {
+    const correct_size = this._corrects.reduce((total: number, correct: boolean) => correct ? total + 1 : total, 0)
+    return correct_size / this._corrects.length
+  }
+}
+
+const makeId = (function() {
+  let count = 1
+  return function makeId(): number {
+    return count++
+  }
+}())
+
+function setUnion<T>(a: Set<T>, b: Set<T>): Set<T> {
+  return new Set([...a, ...b])
+}
+
+function setIntersection<T>(a: Set<T>, b: Set<T>): Set<T> {
+  return new Set([...a].filter(x => b.has(x)))
+}
+
+function setDifference<T>(a: Set<T>, b: Set<T>): Set<T> {
+  return new Set([...a].filter(x => !b.has(x)))
+}
+
+function never(): never {
+  throw new DevelopmentError('Never')
+}
 
 namespace NN {
   const INPUT_SLOT_SIZE = 3
@@ -92,8 +132,8 @@ namespace NN {
   const NEGATIVE_THRESHOLD_SIGNAL = -0.8
 
   // Edge
-  const INITIAL_POSITIVE_WIGHT = 0.5
-  const INITIAL_NEGATIVE_WIGHT = -0.5
+  const INITIAL_POSITIVE_WIGHT = 0.15
+  const INITIAL_NEGATIVE_WIGHT = -0.15
   const DELETE_THRESHOULD_WEIGHT = 0.1
   const EDGE_TO_CORRECT_RATE = 1
 
@@ -103,22 +143,26 @@ namespace NN {
   const enum NodeType { Input, Middle, Output }
 
   class Node {
+    id: number
     type: NodeType
     signal: Signal = INITIAL_SIGNAL
     input = new Set<Edge>()
     output = new Set<Edge>()
 
     constructor(type: NodeType) {
+      this.id = makeId()
       this.type = type
     }
   }
 
   class Edge {
+    id: number
     weight: number
     source: Node
     destination: Node
 
     constructor(source: Node, destination: Node, weight: number) {
+      this.id = makeId()
       this.weight = weight
       this.source = source
       this.destination = destination
@@ -156,18 +200,23 @@ namespace NN {
   type InputMap<Element> = Array<Map<Element, Node>>
   type OutputMap<Output> = Map<Output, Node>
 
-  // Oprator
+  export function main() {
+    const elements = ['h', 'i', 'e']
 
-  const elements = ['h', 'i', 'e']
+    const testData = makeTestData(elements, 10)
 
-  const testData = makeTestData(elements, 1)
+    const [inputMap] = makeInputMap(elements, INPUT_SLOT_SIZE)
 
-  const [inputMap] = makeInputMap(elements, INPUT_SLOT_SIZE)
+    const [outputMap] = makeOutputMap([LearnOutput.Hit, LearnOutput.Nothing])
 
-  const [outputMap] = makeOutputMap([LearnOutput.Hit, LearnOutput.Nothing])
-
-  for (let input of testData) {
-    applyNN(inputMap, outputMap, input)
+    for (let index in testData) {
+      Log.debug('input count', index)
+      Log.print('input count', index)
+      let t = Date.now()
+      applyNN(inputMap, outputMap, testData[index])
+      Log.debug('time', Date.now() - t)
+      Log.print('time', Date.now() - t)
+    }
   }
 
   // No Genre
@@ -177,8 +226,10 @@ namespace NN {
     const [answer] = decideAnswer(outputMap)
     const correct = getCorrect(input)
     Log.debug('input', input)
-    Log.debug('answer', answer)
-    Log.debug('correct', correct)
+    Log.debug('correct', answer === correct)
+    CorrectCollector.push(answer === correct)
+    Log.debug('correct rate', CorrectCollector.rate())
+    Log.print('correct rate', CorrectCollector.rate())
     Log.debug('isCorrect', answer === correct)
     Log.debug('AllNode.size', AllNode.size())
     showInputMap(inputMap)
@@ -241,96 +292,153 @@ namespace NN {
   }
 
   function feedbackEdge(node: Node, gap: number): void {
-    const paths = getBackPaths(node, [])
-    const effectMap = getEdgeEffects(paths)
-    for (let [edge, effect] of effectMap) {
-      edgeToCorrect(edge, gap, effect)
-    }
-  }
+    const depth = getBackDepth(node)
+    // sum arithmetic sequence
+    const total_depth = depth * (1 + depth) / 2
 
-  function edgeToCorrect(edge: Edge, gap: number, edgeEffect: Effect): void {
-    edge.weight = roundNumber(edge.weight * gap * edgeEffect * EDGE_TO_CORRECT_RATE, MAX_DIGITS)
+    const assignGap = gap * depth / total_depth
+    const remainGap = gap - assignGap
 
-    if (Math.abs(edge.weight) < DELETE_THRESHOULD_WEIGHT) {
-      deleteEdge(edge)
-    }
-  }
+    const total_weight = [...node.input].reduce((result: number, edge: Edge) => result + edge.weight, 0)
 
-  function getEdgeEffects(paths: Set<Path>): Map<Edge, Effect> {
-    // make pathToSignal
-    const pathToSignal = new Map<Path, Signal>()
-    let total_signal = 0
-
-    for (let path of paths) {
-      const path_signal = getPathSignal(path)
-      pathToSignal.set(path, path_signal)
-      total_signal += path_signal
-    }
-
-    // Find all paths affected by edge
-    const edgeToPaths = new Map<Edge, Array<Path>>()
-
-    for (let path of paths) {
-      for (let graphElement of path) {
-        if (graphElement instanceof Node) continue
-
-        let paths = edgeToPaths.get(graphElement) || []
-        paths.push(path)
-        edgeToPaths.set(graphElement, paths)
+    for (let edge of node.input) {
+      const weight_rate = edge.weight / total_weight
+      edge.weight += assignGap * weight_rate
+      edge.weight = roundNumber(edge.weight)
+      if (Math.abs(edge.weight) < DELETE_THRESHOULD_WEIGHT) {
+        deleteEdge(edge)
       }
-    }
-
-    // EdgeEffect = affected signal / total signal / self edge weight
-    const result = new Map()
-
-    for (let [edge, paths] of edgeToPaths) {
-      // calculate affected signal
-      const affected_signal = paths.reduce((total, path) => {
-        const signal = pathToSignal.get(path)
-        if (undefined === signal) throw new DevelopmentError()
-        return total + signal
-      }, 0)
-
-      let effect = roundNumber(affected_signal / total_signal / edge.weight, MAX_DIGITS)
-      if(isNaN(effect) || effect === Infinity || effect === -Infinity){
-        Log.error('edgeEffect', effect)
-        Log.error('affected_signal', affected_signal)
-        Log.error('total_signal', total_signal)
+      if (isNaN(edge.weight) || edge.weight === Infinity || edge.weight === -Infinity) {
         Log.error('edge.weight', edge.weight)
-        throw new DevelopmentError('effect is NaN')
+        Log.error('edge.id', edge.id)
+        Log.error('depth', depth)
+        Log.error('total_depth', total_depth)
+        Log.error('gap', gap)
+        Log.error('assignGap', assignGap)
+        Log.error('total_weight', total_weight)
+        Log.error('weight_rate', weight_rate)
+        throw new DevelopmentError('edge.weight is NaN')
       }
-      result.set(edge, effect)
-    }
-
-    return result
-  }
-
-  function getPathSignal(path: Path): Signal {
-    return path.reduce((total_signal, graphElement) => {
-      if (graphElement instanceof Edge) {
-        return total_signal * graphElement.weight
-      } else if (graphElement instanceof Node) {
-        return total_signal * graphElement.signal
-      } else {
-        return never()
-      }
-    }, 1)
-  }
-
-  function getBackPaths(node: Node, path: Path): Set<Path> {
-    if (node.input.size === 0) {
-      path.push(node)
-      return new Set([path])
-    } else {
-      let result = new Set<Path>()
-      for (let edge of node.input) {
-        const new_path = path.concat([])
-        new_path.push(edge)
-        result = setUnion(result, getBackPaths(edge.source, new_path))
-      }
-      return result
+      feedbackEdge(edge.source, remainGap)
     }
   }
+
+  // function feedbackEdge(node: Node, gap: number): void {
+  //   const paths = getBackPaths(node, [])
+  //   const effectMap = getEdgeEffects(node)
+  //   for (let [edge, effect] of effectMap) {
+  //     edgeToCorrect(edge, gap, effect)
+  //   }
+  //
+  //   for(let edge of node.input){
+  //     feedbackEdge(edge.source, gap)
+  //   }
+  // }
+
+  // function edgeToCorrect(edge: Edge, gap: number, edgeEffect: Effect): void {
+  //   edge.weight = roundNumber(edge.weight * gap * edgeEffect * EDGE_TO_CORRECT_RATE, MAX_DIGITS)
+  //
+  //   if (Math.abs(edge.weight) < DELETE_THRESHOULD_WEIGHT) {
+  //     deleteEdge(edge)
+  //   }
+  // }
+
+  // function getEdgeEffects(node: Node): Map<Edge, Effect> {
+  //   const result = new Map()
+  //   const total_weight = sumEdgeEffect(node)
+  //   const edges = backGenealogyEdges(node)
+  //
+  //   for(let edge of edges){
+  //     result.set(edge, edge.weight / total_weight)
+  //   }
+  //
+  //   return result
+  // }
+
+  // function sumEdgeEffect(node: Node): number {
+  //   let total_weight = 0
+  //   for(let edge of node.input){
+  //     total_weight += Math.abs(edge.weight)
+  //     total_weight += sumEdgeEffect(edge.source)
+  //   }
+  //   return total_weight
+  // }
+
+  // function getEdgeEffects(paths: Set<Path>): Map<Edge, Effect> {
+  //   // make pathToSignal
+  //   const pathToSignal = new Map<Path, Signal>()
+  //   let total_signal = 0
+  //
+  //   for (let path of paths) {
+  //     const path_signal = getPathSignal(path)
+  //     pathToSignal.set(path, path_signal)
+  //     total_signal += path_signal
+  //   }
+  //
+  //   // Find all paths affected by edge
+  //   const edgeToPaths = new Map<Edge, Array<Path>>()
+  //
+  //   for (let path of paths) {
+  //     for (let graphElement of path) {
+  //       if (graphElement instanceof Node) continue
+  //
+  //       let paths = edgeToPaths.get(graphElement) || []
+  //       paths.push(path)
+  //       edgeToPaths.set(graphElement, paths)
+  //     }
+  //   }
+  //
+  //   // EdgeEffect = affected signal / total signal / self edge weight
+  //   const result = new Map()
+  //
+  //   for (let [edge, paths] of edgeToPaths) {
+  //     // calculate affected signal
+  //     const affected_signal = paths.reduce((total, path) => {
+  //       const signal = pathToSignal.get(path)
+  //       if (undefined === signal) throw new DevelopmentError()
+  //       return total + signal
+  //     }, 0)
+  //
+  //     let effect = roundNumber(affected_signal / total_signal / edge.weight, MAX_DIGITS)
+  //     if(isNaN(effect) || effect === Infinity || effect === -Infinity){
+  //       Log.error('edgeEffect', effect)
+  //       Log.error('affected_signal', affected_signal)
+  //       Log.error('total_signal', total_signal)
+  //       Log.error('edge.weight', edge.weight)
+  //       throw new DevelopmentError('effect is NaN')
+  //     }
+  //     result.set(edge, effect)
+  //   }
+  //
+  //   return result
+  // }
+
+  // function getPathSignal(path: Path): Signal {
+  //   return path.reduce((total_signal, graphElement) => {
+  //     if (graphElement instanceof Edge) {
+  //       return total_signal * graphElement.weight
+  //     } else if (graphElement instanceof Node) {
+  //       return total_signal * graphElement.signal
+  //     } else {
+  //       return never()
+  //     }
+  //   }, 1)
+  // }
+
+  // function getBackPaths(node: Node, path: Path): Set<Path> {
+  //   if (node.input.size === 0) {
+  //     path.push(node)
+  //     return new Set([path])
+  //   } else {
+  //     let result = new Set<Path>()
+  //     for (let edge of node.input) {
+  //       const new_path = path.concat([])
+  //       new_path.push(edge)
+  //       result = setUnion(result, getBackPaths(edge.source, new_path))
+  //     }
+  //     return result
+  //   }
+  // }
 
   function getCorrect<Element>(input: Element[]): any {
     return /hi/.test(input.join('')) ? LearnOutput.Hit : LearnOutput.Nothing
@@ -402,7 +510,7 @@ namespace NN {
 
     inputMap.forEach((map, index) => {
       for (let [element, node] of map) {
-        Log.debug('InputMap:Node', `index: ${index}, element: ${element}, signal: ${node.signal}`)
+        Log.debug('InputMap:Node', `index: ${index}, element: ${element}, id: ${node.id}, signal: ${node.signal}`)
       }
     })
 
@@ -413,7 +521,7 @@ namespace NN {
     Log.debug('OutputMap:Start', '')
 
     for (let [output, node] of outputMap) {
-      Log.debug('OutputMap:Node', `output: ${LearnOutput[output]}, signal: ${node.signal}`)
+      Log.debug('OutputMap:Node', `output: ${LearnOutput[output]}, id: ${node.id}, signal: ${node.signal}`)
     }
 
     Log.debug('OutputMap:End', '')
@@ -438,9 +546,9 @@ namespace NN {
       let text = ''
       for (let graphElement of path) {
         if (graphElement instanceof Node) {
-          text += `[ ${graphElement.signal} ] `
+          text += `[ ${graphElement.id} : ${graphElement.signal} ] `
         } else if (graphElement instanceof Edge) {
-          text += `= ${graphElement.weight} = `
+          text += `= ${graphElement.id} : ${graphElement.weight} = `
         } else { never() }
       }
       Log.debug('NN:Path', text)
@@ -491,9 +599,24 @@ namespace NN {
   // Core NN
 
   function addSignal(node: Node, value: number): void {
-    node.signal = roundNumber(node.signal + value, MAX_DIGITS)
+    node.signal = roundNumber(node.signal + value)
+    if (isNaN(node.signal) || node.signal === Infinity || node.signal === -Infinity) {
+      Log.error('node.signal', node.signal)
+      Log.error('node.id', node.id)
+      Log.error('node.input.size', node.input.size)
+      Log.error('value', value)
+      throw new DevelopmentError('node.signal is NaN')
+    }
 
     for (let edge of node.output) {
+      let tmp = value * edge.weight / edge.destination.input.size
+      if (isNaN(tmp) || tmp === Infinity || tmp === -Infinity) {
+        Log.error('add value', tmp)
+        Log.error('value', value)
+        Log.error('edge.weight', edge.weight)
+        Log.error('edge.destination.input.size', edge.destination.input.size)
+        throw new DevelopmentError('add value is NaN')
+      }
       addSignal(edge.destination, value * edge.weight / edge.destination.input.size)
     }
   }
@@ -551,25 +674,43 @@ namespace NN {
       deleteEdge(edge)
     }
   }
+
+  function getBackDepth(node: Node): number {
+    let result = 0
+    recGetBackDepth(node, 0, depth => {
+      if (result < depth) {
+        result = depth
+      }
+    })
+    return result
+  }
+
+  function recGetBackDepth(node: Node, depth: number, func: (depth: number) => void): void {
+    if (node.input.size === 0) {
+      func(depth)
+      return
+    }
+
+    for (let edge of node.input) {
+      recGetBackDepth(edge.source, depth++, func)
+    }
+  }
+
+  function backGenealogyEdges(node: Node): Edge[] {
+    let result: Edge[] = []
+    for (let edge of node.input) {
+      result.push(edge)
+      result = result.concat(backGenealogyEdges(edge.source))
+    }
+    return result
+  }
+
+  // Utility
+
+  function roundNumber(number: number, digits?: number) {
+    let disits = 10 ** (digits || MAX_DIGITS)
+    return Math.round(number * disits) / disits
+  }
 }
 
-function setUnion<T>(a: Set<T>, b: Set<T>): Set<T> {
-  return new Set([...a, ...b])
-}
-
-function setIntersection<T>(a: Set<T>, b: Set<T>): Set<T> {
-  return new Set([...a].filter(x => b.has(x)))
-}
-
-function setDifference<T>(a: Set<T>, b: Set<T>): Set<T> {
-  return new Set([...a].filter(x => !b.has(x)))
-}
-
-function never(): never {
-  throw new DevelopmentError('Never')
-}
-
-function roundNumber(number: number, size: number) {
-  let disits = 10 ** size
-  return Math.round(number * disits) / disits
-}
+NN.main()
